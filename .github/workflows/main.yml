@@ -1,0 +1,92 @@
+name: main
+on: push
+
+jobs:
+  lint:
+    name: Lint code
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version: [ '3.10' ]
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Python
+        uses: actions/setup-python@v3
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+        with:
+          version: "1.1.13"
+          virtualenvs-in-project: true
+      - name: Set up cache
+        uses: actions/cache@v2
+        id: cache
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-py-${{ matrix.python-version }}-poetry-${{ hashFiles('poetry.lock') }}
+      - name: Ensure cache is healthy
+        if: steps.cache.outputs.cache-hit == 'true'
+        run: poetry run pip --version >/dev/null 2>&1 || rm -rf .venv
+      - name: Install dependencies
+        run: poetry install --no-interaction
+      - name: Run linters
+        run: |
+          poetry run flake8 app tests
+          poetry run mypy app tests
+          poetry run isort app tests
+
+  test:
+    needs: lint
+    strategy:
+      fail-fast: true
+      matrix:
+        os: [ ubuntu-latest, macos-latest, windows-latest ]
+        python-version: [ '3.10' ]
+    defaults:
+      run:
+        shell: bash
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      - uses: actions/checkout@v3
+      - name: Set up Python
+        uses: actions/setup-python@v3
+        with:
+          python-version: ${{ matrix.python-version }}
+      - name: Install Poetry
+        uses: snok/install-poetry@v1
+        with:
+          version: "1.1.13"
+          virtualenvs-in-project: true
+      - name: Set up cache
+        uses: actions/cache@v2
+        id: cache
+        with:
+          path: .venv
+          key: venv-${{ runner.os }}-py-${{ matrix.python-version }}-poetry-${{ hashFiles('poetry.lock') }}
+      - name: Ensure cache is healthy
+        if: steps.cache.outputs.cache-hit == 'true'
+        run: poetry run pip --version >/dev/null 2>&1 || rm -rf .venv
+      - name: Install dependencies
+        run: poetry install --no-interaction
+      - name: Run tests
+        run: |
+          source $VENV
+          pytest -vvv --cov-report xml --cov=./
+      - name: Upload coverage to Codecov
+        uses: codecov/codecov-action@v2
+  deploy:
+    needs: [test, lint]
+    env:
+      IMAGE_NAME: mariavalieva/example-fastapi-app-(sqlalchemy-pytest)
+      DOCKER_USER: ${{ secrets.DOCKER_USER }}
+      DOCKER_PASSWORD: ${{ secrets.DOCKER_PASSWORD }}
+    runs-on: ubuntu-latest
+    steps:
+        - uses: actions/checkout@v2
+        - name: Build image and publish to registry
+          run: |
+            docker build -t $IMAGE_NAME:latest .
+            echo $DOCKER_PASSWORD | docker login -u $DOCKER_USER --password-stdin
+            docker push $IMAGE_NAME:latest
